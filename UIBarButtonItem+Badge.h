@@ -8,32 +8,28 @@
 
 #import <UIKit/UIKit.h>
 
-NS_ASSUME_NONNULL_BEGIN
+@interface UIBarButtonItem (Badge)
 
-@interface UIBarButtonItem (LS_Badge)
+@property (strong, atomic) UILabel *badge;
 
-@property (strong, atomic) UILabel *ls_badge;
-
-// Badge value to be displayed
-@property (nonatomic) NSString *ls_badgeValue;
+// Badge value to be display
+@property (nonatomic) NSString *badgeValue;
 // Badge background color
-@property (nonatomic) UIColor *ls_badgeBGColor;
+@property (nonatomic) UIColor *badgeBGColor;
 // Badge text color
-@property (nonatomic) UIColor *ls_badgeTextColor;
+@property (nonatomic) UIColor *badgeTextColor;
 // Badge font
-@property (nonatomic) UIFont *ls_badgeFont;
+@property (nonatomic) UIFont *badgeFont;
 // Padding value for the badge
-@property (nonatomic) CGFloat ls_badgePadding;
-// Minimum badge size
-@property (nonatomic) CGFloat ls_badgeMinSize;
-// Offsets to position the badge over the bar button item
-@property (nonatomic) CGFloat ls_badgeOriginX;
-@property (nonatomic) CGFloat ls_badgeOriginY;
-// Hide badge when value is zero (for numeric values)
-@property (nonatomic) BOOL ls_shouldHideBadgeAtZero;
-// Bounce animation when value changes
-@property (nonatomic) BOOL ls_shouldAnimateBadge;
+@property (nonatomic) CGFloat badgePadding;
+// Minimum size badge to small
+@property (nonatomic) CGFloat badgeMinSize;
+// Values for offseting the badge over the BarButtonItem you picked
+@property (nonatomic) CGFloat badgeOriginX;
+@property (nonatomic) CGFloat badgeOriginY;
+// In case of numbers, remove the badge when reaching zero
+@property BOOL shouldHideBadgeAtZero;
+// Badge has a bounce animation when value changes
+@property BOOL shouldAnimateBadge;
 
 @end
-
-NS_ASSUME_NONNULL_END
