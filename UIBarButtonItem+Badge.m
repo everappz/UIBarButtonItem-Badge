@@ -156,7 +156,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
         if (self.customView) {
             [self.customView addSubview:lbl];
         } else if ([self respondsToSelector:@selector(view)] && [(id)self view]) {
-            [[(id)self view] addSubview:lbl];
+            [(UIView *)[(id)self view] addSubview:lbl];
         }
     }
     return lbl;
