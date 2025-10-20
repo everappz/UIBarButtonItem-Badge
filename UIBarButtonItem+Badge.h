@@ -12,16 +12,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface UIBarButtonItem (LS_Badge)
 
-@property (strong, atomic) UILabel *ls_badge;
+@property (strong, nonatomic) UILabel *ls_badge;
 
 // Badge value to be displayed
-@property (nonatomic) NSString *ls_badgeValue;
+@property (strong, nonatomic) NSString *ls_badgeValue;
 // Badge background color
-@property (nonatomic) UIColor *ls_badgeBGColor;
+@property (strong, nonatomic) UIColor *ls_badgeBGColor;
 // Badge text color
-@property (nonatomic) UIColor *ls_badgeTextColor;
+@property (strong, nonatomic) UIColor *ls_badgeTextColor;
 // Badge font
-@property (nonatomic) UIFont *ls_badgeFont;
+@property (strong, nonatomic) UIFont *ls_badgeFont;
 // Padding value for the badge
 @property (nonatomic) CGFloat ls_badgePadding;
 // Minimum badge size
@@ -33,6 +33,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL ls_shouldHideBadgeAtZero;
 // Bounce animation when value changes
 @property (nonatomic) BOOL ls_shouldAnimateBadge;
+
+- (void)ls_removeBadge:(BOOL)animated;
 
 @end
 

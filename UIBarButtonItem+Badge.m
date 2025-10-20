@@ -6,7 +6,10 @@
 //  Copyright (c) 2014 Valnet Inc. All rights reserved.
 //
 #import <objc/runtime.h>
+#import <UIKit/UIKit.h>
 #import "UIBarButtonItem+Badge.h"
+
+#pragma mark - Associated Keys
 
 static NSString const *UIBarButtonItem_ls_badgeKey                   = @"UIBarButtonItem_ls_badgeKey";
 static NSString const *UIBarButtonItem_ls_badgeBGColorKey            = @"UIBarButtonItem_ls_badgeBGColorKey";
@@ -19,6 +22,89 @@ static NSString const *UIBarButtonItem_ls_badgeOriginYKey            = @"UIBarBu
 static NSString const *UIBarButtonItem_ls_shouldHideBadgeAtZeroKey   = @"UIBarButtonItem_ls_shouldHideBadgeAtZeroKey";
 static NSString const *UIBarButtonItem_ls_shouldAnimateBadgeKey      = @"UIBarButtonItem_ls_shouldAnimateBadgeKey";
 static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarButtonItem_ls_badgeValueKey";
+static NSString const *UIBarButtonItem_ls_hostingNavBarKey           = @"UIBarButtonItem_ls_hostingNavBarKey";
+
+#pragma mark - Helpers
+
+static inline BOOL LS_NavItemContainsBarButtonItem(UINavigationItem *navItem, UIBarButtonItem *item) {
+    if (!navItem || !item) return NO;
+    if (navItem.backBarButtonItem == item) return YES;
+    if (navItem.leftBarButtonItem == item) return YES;
+    if (navItem.rightBarButtonItem == item) return YES;
+    if ([navItem.leftBarButtonItems containsObject:item]) return YES;
+    if ([navItem.rightBarButtonItems containsObject:item]) return YES;
+    return NO;
+}
+
+static UINavigationBar *LS_FindHostingNavigationBarForItem(UIBarButtonItem *item) {
+    // 1) If the item already has a view in the hierarchy, climb up to a bar.
+    UIView *candidateView = nil;
+    if (item.customView) {
+        candidateView = item.customView;
+    } else if ([item respondsToSelector:@selector(view)]) {
+        candidateView = [item valueForKey:@"view"];
+    }
+    for (UIView *s = candidateView; s; s = s.superview) {
+        if ([s isKindOfClass:UINavigationBar.class]) {
+            return (UINavigationBar *)s;
+        }
+    }
+    
+    // 2) Scan visible windows for nav bars that own this item.
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (w.isHidden || w.alpha < 0.01) continue;
+                NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:w];
+                while (queue.count) {
+                    UIView *u = queue.firstObject; [queue removeObjectAtIndex:0];
+                    if ([u isKindOfClass:UINavigationBar.class]) {
+                        UINavigationBar *bar = (UINavigationBar *)u;
+                        for (UINavigationItem *ni in (bar.items ?: @[])) {
+                            if (LS_NavItemContainsBarButtonItem(ni, item)) return bar;
+                        }
+                    }
+                    [queue addObjectsFromArray:u.subviews];
+                }
+            }
+        }
+    } else {
+        UIWindow *w = UIApplication.sharedApplication.keyWindow;
+        if (w) {
+            NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:w];
+            while (queue.count) {
+                UIView *u = queue.firstObject; [queue removeObjectAtIndex:0];
+                if ([u isKindOfClass:UINavigationBar.class]) {
+                    UINavigationBar *bar = (UINavigationBar *)u;
+                    for (UINavigationItem *ni in (bar.items ?: @[])) {
+                        if (LS_NavItemContainsBarButtonItem(ni, item)) return bar;
+                    }
+                }
+                [queue addObjectsFromArray:u.subviews];
+            }
+        }
+    }
+    return nil;
+}
+
+static UIView *LS_BarButtonSourceView(UIBarButtonItem *item) {
+    if (item.customView) return item.customView;
+    if ([item respondsToSelector:@selector(view)]) {
+        return [item valueForKey:@"view"];
+    }
+    return nil;
+}
+
+static inline UINavigationBar *LS_GetHostingNavBar(UIBarButtonItem *item) {
+    return objc_getAssociatedObject(item, &UIBarButtonItem_ls_hostingNavBarKey);
+}
+
+static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *bar) {
+    objc_setAssociatedObject(item, &UIBarButtonItem_ls_hostingNavBarKey, bar, OBJC_ASSOCIATION_ASSIGN);
+}
+
+#pragma mark - Implementation
 
 @implementation UIBarButtonItem (LS_Badge)
 
@@ -30,31 +116,44 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
 
 - (void)ls_badgeInit
 {
-    UIView *superview = nil;
-    CGFloat defaultOriginX = 0.0;
-
-    if (self.customView) {
-        superview = self.customView;
-        defaultOriginX = superview.frame.size.width - self.ls_badge.frame.size.width / 2.0;
-        // Avoid clipping during animations
-        superview.clipsToBounds = NO;
-    } else if ([self respondsToSelector:@selector(view)] && [(id)self view]) {
-        superview = [(id)self view];
-        defaultOriginX = superview.frame.size.width - self.ls_badge.frame.size.width;
-    }
-
-    [superview addSubview:self.ls_badge];
-
+    UILabel *badgeLabel = self.ls_badge;
+    
     // Default appearance
     self.ls_badgeBGColor   = [UIColor redColor];
     self.ls_badgeTextColor = [UIColor whiteColor];
     self.ls_badgeFont      = [UIFont systemFontOfSize:12.0];
     self.ls_badgePadding   = 6.0;
     self.ls_badgeMinSize   = 8.0;
-    self.ls_badgeOriginX   = defaultOriginX;
+    
+    // Offsets relative to the item view’s top-right corner
+    self.ls_badgeOriginX   = 0.0;
     self.ls_badgeOriginY   = -4.0;
+    
     self.ls_shouldHideBadgeAtZero = YES;
     self.ls_shouldAnimateBadge    = YES;
+    
+    // Attach badge to the hosting UINavigationBar if available; otherwise temporary fallback
+    UINavigationBar *bar = LS_FindHostingNavigationBarForItem(self);
+    if (bar) {
+        LS_SetHostingNavBar(self, bar);
+        if (badgeLabel.superview != bar) {
+            [badgeLabel removeFromSuperview];
+            [bar addSubview:badgeLabel];
+        }
+        [bar bringSubviewToFront:badgeLabel];
+    } else {
+        // Fallback until the bar is available (e.g., before the item is displayed)
+        UIView *superview = LS_BarButtonSourceView(self);
+        if (superview) {
+            superview.clipsToBounds = NO;
+            if (badgeLabel.superview != superview) {
+                [badgeLabel removeFromSuperview];
+                [superview addSubview:badgeLabel];
+            }
+        }
+    }
+    
+    [self ls_refreshBadge];
 }
 
 #pragma mark - Utility
@@ -65,11 +164,11 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     self.ls_badge.textColor       = self.ls_badgeTextColor;
     self.ls_badge.backgroundColor = self.ls_badgeBGColor;
     self.ls_badge.font            = self.ls_badgeFont;
-
+    
     BOOL shouldHide = (!self.ls_badgeValue ||
                        [self.ls_badgeValue isEqualToString:@""] ||
                        ([self.ls_badgeValue isEqualToString:@"0"] && self.ls_shouldHideBadgeAtZero));
-
+    
     self.ls_badge.hidden = shouldHide;
     if (!shouldHide) {
         [self ls_updateBadgeValueAnimated:YES];
@@ -85,24 +184,66 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
 
 - (void)ls_updateBadgeFrame
 {
+    UILabel *badge = self.ls_badge;
+    if (!badge) return;
+    
+    // Size
     CGSize expected = [self ls_badgeExpectedSize];
-
-    CGFloat minHeight = MAX(expected.height, self.ls_badgeMinSize);
-    CGFloat minWidth  = MAX(expected.width,  minHeight);
-    CGFloat padding   = self.ls_badgePadding;
-
-    self.ls_badge.layer.masksToBounds = YES;
-    self.ls_badge.frame = CGRectMake(self.ls_badgeOriginX,
-                                     self.ls_badgeOriginY,
-                                     minWidth + padding,
-                                     minHeight + padding);
-    self.ls_badge.layer.cornerRadius = (minHeight + padding) / 2.0;
+    CGFloat minH = MAX(expected.height, self.ls_badgeMinSize);
+    CGFloat minW = MAX(expected.width,  minH);
+    CGFloat pad  = self.ls_badgePadding;
+    
+    CGSize badgeSize = CGSizeMake(minW + pad, minH + pad);
+    badge.layer.masksToBounds = YES;
+    badge.layer.cornerRadius  = (minH + pad) * 0.5;
+    if (@available(iOS 13.0, *)) {
+        badge.layer.cornerCurve = kCACornerCurveContinuous;
+    }
+    
+    // Ensure badge is attached to a UINavigationBar
+    UINavigationBar *bar = LS_GetHostingNavBar(self);
+    if (!bar) {
+        bar = LS_FindHostingNavigationBarForItem(self);
+        if (bar) {
+            LS_SetHostingNavBar(self, bar);
+            [badge removeFromSuperview];
+            [bar addSubview:badge];
+        }
+    }
+    
+    UIView *sourceView = LS_BarButtonSourceView(self);
+    if (bar && sourceView && sourceView.window) {
+        // Convert the item view’s frame into the nav bar’s coordinate space
+        CGRect srcInBar = [sourceView.superview convertRect:sourceView.frame toView:bar];
+        
+        // Anchor near the top-right corner of the bar button item’s view.
+        // Tweak the 0.35 factor to visually align with the icon shape if needed.
+        CGFloat x = CGRectGetMaxX(srcInBar) - badgeSize.width * 0.35 + self.ls_badgeOriginX;
+        CGFloat y = CGRectGetMinY(srcInBar) - badgeSize.height * 0.35 + self.ls_badgeOriginY;
+        
+        badge.frame = (CGRect){ .origin = CGPointMake(x, y), .size = badgeSize };
+        [bar bringSubviewToFront:badge];
+        return;
+    }
+    
+    // Fallback: position relative to current superview (pre-attachment)
+    UIView *fallback = badge.superview ?: sourceView;
+    if (fallback) {
+        CGFloat defaultX = fallback.bounds.size.width - badgeSize.width * 0.5;
+        badge.frame = CGRectMake(defaultX + self.ls_badgeOriginX,
+                                 self.ls_badgeOriginY,
+                                 badgeSize.width,
+                                 badgeSize.height);
+    } else {
+        badge.frame = (CGRect){ .origin = CGPointMake(self.ls_badgeOriginX, self.ls_badgeOriginY),
+            .size = badgeSize };
+    }
 }
 
 - (void)ls_updateBadgeValueAnimated:(BOOL)animated
 {
     BOOL valueChanged = ![self.ls_badge.text isEqualToString:self.ls_badgeValue];
-
+    
     if (animated && self.ls_shouldAnimateBadge && valueChanged) {
         CABasicAnimation *animation = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
         animation.fromValue = @(1.5);
@@ -133,14 +274,24 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     return dup;
 }
 
-- (void)ls_removeBadge
+- (void)ls_removeBadge:(BOOL)animated
 {
-    [UIView animateWithDuration:0.2 animations:^{
-        self.ls_badge.transform = CGAffineTransformMakeScale(0, 0);
-    } completion:^(BOOL finished) {
+    dispatch_block_t completion = ^{
         [self.ls_badge removeFromSuperview];
         self.ls_badge = nil;
-    }];
+        LS_SetHostingNavBar(self, nil);
+    };
+    
+    if (animated) {
+        [UIView animateWithDuration:0.2 animations:^{
+            self.ls_badge.transform = CGAffineTransformMakeScale(0, 0);
+        } completion:^(BOOL finished) {
+            completion();
+        }];
+    }
+    else {
+        completion();
+    }
 }
 
 #pragma mark - Getters / Setters (Associated Objects)
@@ -149,18 +300,20 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
 {
     UILabel *lbl = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeKey);
     if (lbl == nil) {
-        lbl = [[UILabel alloc] initWithFrame:CGRectMake(self.ls_badgeOriginX, self.ls_badgeOriginY, 20, 20)];
+        lbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
         lbl.textAlignment = NSTextAlignmentCenter;
         [self setLs_badge:lbl];
+        lbl.backgroundColor = self.ls_badgeBGColor;
+        lbl.textColor = self.ls_badgeTextColor;
+        lbl.font = self.ls_badgeFont;
+        lbl.userInteractionEnabled = NO;
+        
+        // Do NOT attach here; ls_badgeInit decides proper superview (nav bar vs fallback)
         [self ls_badgeInit];
-        if (self.customView) {
-            [self.customView addSubview:lbl];
-        } else if ([self respondsToSelector:@selector(view)] && [(id)self view]) {
-            [(UIView *)[(id)self view] addSubview:lbl];
-        }
     }
     return lbl;
 }
+
 - (void)setLs_badge:(UILabel *)badgeLabel
 {
     objc_setAssociatedObject(self, &UIBarButtonItem_ls_badgeKey, badgeLabel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -170,6 +323,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
 {
     return objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeValueKey);
 }
+
 - (void)setLs_badgeValue:(NSString *)badgeValue
 {
     objc_setAssociatedObject(self, &UIBarButtonItem_ls_badgeValueKey, badgeValue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -181,6 +335,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
 {
     return objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeBGColorKey);
 }
+
 - (void)setLs_badgeBGColor:(UIColor *)badgeBGColor
 {
     objc_setAssociatedObject(self, &UIBarButtonItem_ls_badgeBGColorKey, badgeBGColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -191,6 +346,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
 {
     return objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeTextColorKey);
 }
+
 - (void)setLs_badgeTextColor:(UIColor *)badgeTextColor
 {
     objc_setAssociatedObject(self, &UIBarButtonItem_ls_badgeTextColorKey, badgeTextColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -201,6 +357,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
 {
     return objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeFontKey);
 }
+
 - (void)setLs_badgeFont:(UIFont *)badgeFont
 {
     objc_setAssociatedObject(self, &UIBarButtonItem_ls_badgeFontKey, badgeFont, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -212,6 +369,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     NSNumber *n = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgePaddingKey);
     return n.floatValue;
 }
+
 - (void)setLs_badgePadding:(CGFloat)badgePadding
 {
     NSNumber *n = @(badgePadding);
@@ -224,6 +382,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     NSNumber *n = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeMinSizeKey);
     return n.floatValue;
 }
+
 - (void)setLs_badgeMinSize:(CGFloat)badgeMinSize
 {
     NSNumber *n = @(badgeMinSize);
@@ -236,6 +395,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     NSNumber *n = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeOriginXKey);
     return n.floatValue;
 }
+
 - (void)setLs_badgeOriginX:(CGFloat)badgeOriginX
 {
     NSNumber *n = @(badgeOriginX);
@@ -248,6 +408,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     NSNumber *n = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeOriginYKey);
     return n.floatValue;
 }
+
 - (void)setLs_badgeOriginY:(CGFloat)badgeOriginY
 {
     NSNumber *n = @(badgeOriginY);
@@ -260,6 +421,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     NSNumber *n = objc_getAssociatedObject(self, &UIBarButtonItem_ls_shouldHideBadgeAtZeroKey);
     return n.boolValue;
 }
+
 - (void)setLs_shouldHideBadgeAtZero:(BOOL)shouldHideBadgeAtZero
 {
     NSNumber *n = @(shouldHideBadgeAtZero);
@@ -272,6 +434,7 @@ static NSString const *UIBarButtonItem_ls_badgeValueKey              = @"UIBarBu
     NSNumber *n = objc_getAssociatedObject(self, &UIBarButtonItem_ls_shouldAnimateBadgeKey);
     return n.boolValue;
 }
+
 - (void)setLs_shouldAnimateBadge:(BOOL)shouldAnimateBadge
 {
     NSNumber *n = @(shouldAnimateBadge);
