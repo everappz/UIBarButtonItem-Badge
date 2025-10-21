@@ -179,6 +179,9 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
     if (!shouldHide) {
         [self ls_updateBadgeValueAnimated:YES];
     }
+    else {
+        [self ls_removeBadgeAnimated:YES];
+    }
 }
 
 - (CGSize)ls_badgeExpectedSize
