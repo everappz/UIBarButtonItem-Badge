@@ -164,6 +164,13 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
 
 #pragma mark - Utility
 
+- (BOOL)ls_shouldHideBadge {
+    BOOL shouldHide = (!self.ls_badgeValue ||
+                       [self.ls_badgeValue isEqualToString:@""] ||
+                       ([self.ls_badgeValue isEqualToString:@"0"] && self.ls_shouldHideBadgeAtZero));
+    return shouldHide;
+}
+
 - (void)ls_refreshBadge
 {
     // Apply attributes
@@ -171,9 +178,7 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
     self.ls_badge.backgroundColor = self.ls_badgeBGColor;
     self.ls_badge.font            = self.ls_badgeFont;
     
-    BOOL shouldHide = (!self.ls_badgeValue ||
-                       [self.ls_badgeValue isEqualToString:@""] ||
-                       ([self.ls_badgeValue isEqualToString:@"0"] && self.ls_shouldHideBadgeAtZero));
+    const BOOL shouldHide = self.ls_shouldHideBadge;
     
     self.ls_badge.hidden = shouldHide;
     if (!shouldHide) {
@@ -303,9 +308,8 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
 - (void)ls_removeBadgeAnimated:(BOOL)animated
 {
     dispatch_block_t completion = ^{
-        UILabel *lbl = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeKey);
-        [lbl removeFromSuperview];
-        [self setLs_badge:nil];
+        [self.ls_badge removeFromSuperview];
+        self.ls_badge = nil;
         LS_SetHostingNavBar(self, nil);
     };
     
@@ -325,20 +329,7 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
 
 - (UILabel *)ls_badge
 {
-    UILabel *lbl = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeKey);
-    if (lbl == nil) {
-        lbl = [[UILabel alloc] initWithFrame:CGRectMake(0.0, 0.0, 20.0, 20.0)];
-        [self setLs_badge:lbl];
-        lbl.userInteractionEnabled = NO;
-        lbl.textAlignment = NSTextAlignmentCenter;
-        lbl.backgroundColor = self.ls_badgeBGColor;
-        lbl.textColor = self.ls_badgeTextColor;
-        lbl.font = self.ls_badgeFont;
-        
-        // Do NOT attach here; ls_badgeInit decides proper superview (nav bar vs fallback)
-        [self ls_badgeInit];
-    }
-    return lbl;
+    return objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeKey);
 }
 
 - (void)setLs_badge:(UILabel *)badgeLabel
@@ -354,8 +345,29 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
 - (void)setLs_badgeValue:(NSString *)badgeValue
 {
     objc_setAssociatedObject(self, &UIBarButtonItem_ls_badgeValueKey, badgeValue, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [self ls_updateBadgeValueAnimated:YES];
-    [self ls_refreshBadge];
+    
+    if (self.ls_shouldHideBadge) {
+        [self ls_removeBadgeAnimated:NO];
+    }
+    else {
+        //lazy load badge label
+        UILabel *lbl = [self ls_badge];
+        if (lbl == nil) {
+            lbl = [[UILabel alloc] initWithFrame:CGRectMake(0.0, 0.0, 20.0, 20.0)];
+            [self setLs_badge:lbl];
+            lbl.userInteractionEnabled = NO;
+            lbl.textAlignment = NSTextAlignmentCenter;
+            lbl.backgroundColor = self.ls_badgeBGColor;
+            lbl.textColor = self.ls_badgeTextColor;
+            lbl.font = self.ls_badgeFont;
+            
+            // Do NOT attach here; ls_badgeInit decides proper superview (nav bar vs fallback)
+            [self ls_badgeInit];
+        }
+        
+        [self ls_updateBadgeValueAnimated:YES];
+        [self ls_refreshBadge];
+    }
 }
 
 - (UIColor *)ls_badgeBGColor
