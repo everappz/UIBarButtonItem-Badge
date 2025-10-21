@@ -153,6 +153,12 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
         }
     }
     
+    // Avoid wrong-side flash; wait for proper anchor, then place
+    self.ls_badge.alpha = 0.0;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self ls_updateBadgeFrame];
+    });
+    
     [self ls_refreshBadge];
 }
 
@@ -212,6 +218,17 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
     }
     
     UIView *sourceView = LS_BarButtonSourceView(self);
+    
+    // Don't place until the bar button's view exists (prevents wrong initial side) ---
+    if (bar && (!sourceView || !sourceView.window)) {
+        [bar setNeedsLayout];
+        [bar layoutIfNeeded];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self ls_updateBadgeFrame];
+        });
+        return; // keep alpha 0 until we have a correct anchor
+    }
+    
     if (bar && sourceView && sourceView.window) {
         // Convert the item view’s frame into the nav bar’s coordinate space
         CGRect srcInBar = [sourceView.superview convertRect:sourceView.frame toView:bar];
@@ -223,6 +240,9 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
         
         badge.frame = (CGRect){ .origin = CGPointMake(x, y), .size = badgeSize };
         [bar bringSubviewToFront:badge];
+        
+        // Now that it's correctly anchored, reveal without jump
+        badge.alpha = 1.0;
         return;
     }
     
@@ -234,9 +254,12 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
                                  self.ls_badgeOriginY,
                                  badgeSize.width,
                                  badgeSize.height);
+        // Keep hidden in fallback to avoid visible jump
+        badge.alpha = 0.0; // <-- FIX: don't show until anchored to real bar/item view
     } else {
         badge.frame = (CGRect){ .origin = CGPointMake(self.ls_badgeOriginX, self.ls_badgeOriginY),
             .size = badgeSize };
+        badge.alpha = 0.0; // still waiting for a host
     }
 }
 
@@ -252,10 +275,10 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
         animation.timingFunction = [CAMediaTimingFunction functionWithControlPoints:.4f :1.3f :1.f :1.f];
         [self.ls_badge.layer addAnimation:animation forKey:@"ls_badgeBounceAnimation"];
     }
-
+    
     // Update text
     self.ls_badge.text = self.ls_badgeValue;
-
+    
     if (animated && self.ls_shouldAnimateBadge) {
         [UIView animateWithDuration:0.2 animations:^{
             [self ls_updateBadgeFrame];
@@ -274,11 +297,12 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
     return dup;
 }
 
-- (void)ls_removeBadge:(BOOL)animated
+- (void)ls_removeBadgeAnimated:(BOOL)animated
 {
     dispatch_block_t completion = ^{
-        [self.ls_badge removeFromSuperview];
-        self.ls_badge = nil;
+        UILabel *lbl = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeKey);
+        [lbl removeFromSuperview];
+        [self setLs_badge:nil];
         LS_SetHostingNavBar(self, nil);
     };
     
@@ -300,13 +324,13 @@ static inline void LS_SetHostingNavBar(UIBarButtonItem *item, UINavigationBar *b
 {
     UILabel *lbl = objc_getAssociatedObject(self, &UIBarButtonItem_ls_badgeKey);
     if (lbl == nil) {
-        lbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
-        lbl.textAlignment = NSTextAlignmentCenter;
+        lbl = [[UILabel alloc] initWithFrame:CGRectMake(0.0, 0.0, 20.0, 20.0)];
         [self setLs_badge:lbl];
+        lbl.userInteractionEnabled = NO;
+        lbl.textAlignment = NSTextAlignmentCenter;
         lbl.backgroundColor = self.ls_badgeBGColor;
         lbl.textColor = self.ls_badgeTextColor;
         lbl.font = self.ls_badgeFont;
-        lbl.userInteractionEnabled = NO;
         
         // Do NOT attach here; ls_badgeInit decides proper superview (nav bar vs fallback)
         [self ls_badgeInit];
